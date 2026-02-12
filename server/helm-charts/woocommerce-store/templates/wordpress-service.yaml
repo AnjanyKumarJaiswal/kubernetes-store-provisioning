@@ -1,0 +1,20 @@
+{{- if .Values.store.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.store.name }}-wordpress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.store.name }}
+    app.kubernetes.io/component: wordpress
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app.kubernetes.io/name: {{ .Values.store.name }}
+    app.kubernetes.io/component: wordpress
+{{- end }}

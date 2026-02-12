@@ -1,0 +1,33 @@
+{{- if and .Values.store.enabled .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.store.name }}-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.store.name }}
+    app.kubernetes.io/component: ingress
+  annotations:
+    {{- range $key, $value := .Values.ingress.annotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+  - hosts:
+    - {{ .Values.store.name }}.{{ .Values.global.domain }}
+    secretName: {{ .Values.store.name }}-tls-secret
+  {{- end }}
+  rules:
+  - host: {{ .Values.store.name }}.{{ .Values.global.domain }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ .Values.store.name }}-wordpress
+            port:
+              number: {{ .Values.service.port }}
+{{- end }}

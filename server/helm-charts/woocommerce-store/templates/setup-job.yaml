@@ -1,0 +1,237 @@
+{{- if and .Values.store.enabled .Values.setup.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.store.name }}-woocommerce-setup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.store.name }}
+    app.kubernetes.io/component: setup
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Values.store.name }}
+        app.kubernetes.io/component: setup
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+      - name: wait-for-wordpress
+        image: curlimages/curl:8.5.0
+        image: curlimages/curl:8.5.0
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for WordPress to be ready..."
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            if curl -f -s http://{{ .Values.store.name }}-wordpress/wp-login.php > /dev/null 2>&1; then
+              echo "WordPress is ready!"
+              exit 0
+            fi
+            echo "Attempt $((ATTEMPT+1))/$MAX_ATTEMPTS: WordPress not ready yet..."
+            sleep 10
+            ATTEMPT=$((ATTEMPT+1))
+          done
+          echo "WordPress failed to become ready in time"
+          exit 1
+      containers:
+      - name: setup-woocommerce
+        image: "{{ .Values.setup.image.repository }}:{{ .Values.setup.image.tag }}"
+        imagePullPolicy: {{ .Values.setup.image.pullPolicy }}
+        securityContext:
+          runAsUser: 0
+
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 200m
+            memory: 256Mi
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: "{{ .Values.store.name }}-mysql:3306"
+        - name: WORDPRESS_DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.store.name }}-mysql-secret
+              key: mysql-database
+        - name: WORDPRESS_DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.store.name }}-mysql-secret
+              key: mysql-user
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.store.name }}-mysql-secret
+              key: mysql-password
+        - name: WP_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.store.name }}-wordpress-secret
+              key: wordpress-admin-user
+        - name: WP_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.store.name }}-wordpress-secret
+              key: wordpress-admin-password
+        - name: WP_ADMIN_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.store.name }}-wordpress-secret
+              key: wordpress-admin-email
+        - name: STORE_URL
+          value: "http://{{ .Values.store.name }}.{{ .Values.global.domain }}:8080"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          
+          echo "Configuring WP-CLI..."
+          export WP_CLI_CONFIG_PATH=/tmp/wp-cli.yml
+          cat > /tmp/wp-cli.yml <<EOF
+          path: /var/www/html
+          url: ${STORE_URL}
+          core:
+            allow-root: true
+          EOF
+          
+          cd /var/www/html
+          
+          echo "Checking WordPress installation..."
+          if ! wp core is-installed --allow-root 2>/dev/null; then
+            echo "Installing WordPress..."
+            wp core install \
+              --url="${STORE_URL}" \
+              --title="{{ .Values.store.name }} Store" \
+              --admin_user="${WP_ADMIN_USER}" \
+              --admin_password="${WP_ADMIN_PASSWORD}" \
+              --admin_email="${WP_ADMIN_EMAIL}" \
+              --skip-email \
+              --allow-root
+            echo "WordPress installed successfully!"
+          else
+            echo "WordPress already installed, skipping core installation"
+          fi
+          
+          echo "Installing and activating WooCommerce..."
+          if ! wp plugin is-installed woocommerce --allow-root 2>/dev/null; then
+            wp plugin install woocommerce --activate --allow-root
+            echo "WooCommerce installed and activated!"
+          else
+            echo "WooCommerce already installed"
+            if ! wp plugin is-active woocommerce --allow-root; then
+              wp plugin activate woocommerce --allow-root
+              echo "WooCommerce activated!"
+            fi
+          fi
+          
+          echo "Installing and activating Storefront theme..."
+          if ! wp theme is-installed storefront --allow-root 2>/dev/null; then
+            wp theme install storefront --activate --allow-root
+            echo "Storefront theme installed and activated!"
+          else
+            echo "Storefront theme already installed"
+            if ! wp theme is-active storefront --allow-root; then
+              wp theme activate storefront --allow-root
+              echo "Storefront theme activated!"
+            fi
+          fi
+
+          echo "Setting up Storefront pages and menu..."
+          # Create the shop/cart/checkout pages if they don't exist
+          wp wc tool run install_pages --user="${WP_ADMIN_USER}" --allow-root
+
+          # Set Shop as Homepage
+          SHOP_PAGE_ID=$(wp post list --post_type=page --post_status=publish --name=shop --field=ID --allow-root | head -n 1)
+          if [ ! -z "$SHOP_PAGE_ID" ]; then
+            echo "Setting Shop page (ID: $SHOP_PAGE_ID) as homepage..."
+            wp option update show_on_front page --allow-root
+            wp option update page_on_front $SHOP_PAGE_ID --allow-root
+          fi
+
+          # Set Permalinks to /%postname%/ (Essential for WC)
+          wp rewrite structure '/%postname%/' --hard --allow-root
+
+          # Create Primary Menu
+          if ! wp menu list --fields=slug --allow-root | grep -q "primary-menu"; then
+            echo "Creating Primary Menu..."
+            wp menu create "Primary Menu" --allow-root
+            MENU_ID=$(wp menu list --fields=term_id,name --allow-root | grep "Primary Menu" | awk '{print $1}')
+            wp menu location assign $MENU_ID primary --allow-root
+            
+            # Add pages to menu
+            if [ ! -z "$SHOP_PAGE_ID" ]; then
+               wp menu item add-post primary $SHOP_PAGE_ID --title="Shop" --allow-root
+            fi
+            wp menu item add-post primary $(wp post list --post_type=page --name=cart --field=ID --allow-root | head -n 1) --title="Cart" --allow-root
+            wp menu item add-post primary $(wp post list --post_type=page --name=checkout --field=ID --allow-root | head -n 1) --title="Checkout" --allow-root
+            wp menu item add-post primary $(wp post list --post_type=page --name=my-account --field=ID --allow-root | head -n 1) --title="My Account" --allow-root
+          fi
+          
+          echo "Configuring WooCommerce settings..."
+          # Set currency
+          wp option update woocommerce_currency 'USD' --allow-root
+          
+          # Set country
+          wp option update woocommerce_default_country 'US:CA' --allow-root
+          
+          # Enable cash on delivery
+          wp option update woocommerce_cod_settings '{"enabled":"yes","title":"Cash on Delivery","description":"Pay with cash upon delivery."}' --format=json --allow-root
+          
+          # Disable setup wizard
+          wp option update woocommerce_onboarding_profile '{"skipped":true}' --format=json --allow-root
+          
+          {{- if .Values.setup.sampleProduct.enabled }}
+          echo "Creating sample product for testing..."
+          # Check if product already exists
+          PRODUCT_ID=$(wp post list --post_type=product --title="{{ .Values.setup.sampleProduct.name }}" --format=ids --allow-root)
+          
+          if [ -z "$PRODUCT_ID" ]; then
+            PRODUCT_ID=$(wp wc product create \
+              --name="{{ .Values.setup.sampleProduct.name }}" \
+              --type=simple \
+              --regular_price="{{ .Values.setup.sampleProduct.price }}" \
+              --description="{{ .Values.setup.sampleProduct.description }}" \
+              --sku="{{ .Values.setup.sampleProduct.sku }}" \
+              --status=publish \
+              --manage_stock=true \
+              --stock_quantity=100 \
+              --user=1 \
+              --allow-root \
+              --porcelain)
+            echo "Sample product created with ID: $PRODUCT_ID"
+          else
+            echo "Sample product already exists with ID: $PRODUCT_ID"
+          fi
+          {{- end }}
+          
+          echo "Flushing rewrite rules..."
+          wp rewrite flush --allow-root
+          
+          echo "WooCommerce setup completed successfully!"
+          echo "Store URL: ${STORE_URL}"
+          echo "Admin URL: ${STORE_URL}/wp-admin"
+          echo "Admin User: ${WP_ADMIN_USER}"
+        volumeMounts:
+        - name: wordpress-data
+          mountPath: /var/www/html
+      volumes:
+      - name: wordpress-data
+        persistentVolumeClaim:
+          claimName: {{ .Values.store.name }}-wordpress-pvc
+{{- end }}

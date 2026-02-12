@@ -1,0 +1,13 @@
+apiVersion: v2
+name: woocommerce-store-platform
+description: A Helm chart for provisioning WooCommerce stores on Kubernetes
+type: application
+version: 1.0.0
+appVersion: "1.0"
+keywords:
+  - woocommerce
+  - ecommerce
+  - wordpress
+  - kubernetes
+maintainers:
+  - name: Store Platform Team

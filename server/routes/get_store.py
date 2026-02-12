@@ -1,43 +1,73 @@
 from flask import jsonify
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from database import stores_db
+from integrations.store_provisioner import get_provisioner
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-async def get_store(name):
-    normalized_name = name.lower().replace(" ", "-")
-    
-    if normalized_name not in stores_db:
-        return jsonify({"error": f"Store '{normalized_name}' not found"}), 404
-    
-    return jsonify(stores_db[normalized_name]), 200
+def format_store(store):
+    return {
+        "id": store.get("id"),
+        "name": store.get("name"),
+        "type": store.get("type"),
+        "status": store.get("status"),
+        "url": store.get("url"),
+        "createdAt": store.get("created_at"),
+        "namespace": store.get("namespace"),
+        "error": store.get("error"),
+    }
 
 
-async def get_store_status(name):
-    normalized_name = name.lower().replace(" ", "-")
-    
-    if normalized_name not in stores_db:
-        return jsonify({"error": f"Store '{normalized_name}' not found"}), 404
-    
-    store = stores_db[normalized_name]
-    
+def get_store(name):
+    try:
+        provisioner = get_provisioner()
+    except Exception as e:
+        return jsonify({"error": "Kubernetes cluster is not connected."}), 503
+
+    store = provisioner.get_store(name)
+    if not store:
+        return jsonify({"error": f"Store '{name}' not found"}), 404
+
+    return jsonify(format_store(store)), 200
+
+
+def get_store_status(name):
+    try:
+        provisioner = get_provisioner()
+    except Exception as e:
+        return jsonify({"error": "Kubernetes cluster is not connected."}), 503
+
+    result = provisioner.get_store_status(name)
+
+    if not result.get("success"):
+        return jsonify({"error": result.get("error", "Store not found")}), 404
+
+    store = result["store"]
+    response = {
+        "name": store.get("name"),
+        "status": store.get("status"),
+        "url": store.get("url"),
+    }
+
+    if "kubernetes_resources" in store:
+        response["kubernetesResources"] = store["kubernetes_resources"]
+
+    return jsonify(response), 200
+
+
+def delete_store(name):
+    try:
+        provisioner = get_provisioner()
+    except Exception as e:
+        return jsonify({"error": "Kubernetes cluster is not connected."}), 503
+
+    result = provisioner.delete_store(name)
+
+    if not result.get("success"):
+        error_msg = result.get("error", "Failed to delete store")
+        status_code = 404 if "not found" in error_msg.lower() else 500
+        return jsonify({"error": error_msg}), status_code
+
     return jsonify({
-        "name": store["name"],
-        "status": store["status"],
-        "url": store["url"]
-    }), 200
-
-
-async def delete_store(name):
-    normalized_name = name.lower().replace(" ", "-")
-    
-    if normalized_name not in stores_db:
-        return jsonify({"error": f"Store '{normalized_name}' not found"}), 404
-    
-    deleted_store = stores_db.pop(normalized_name)
-    
-    return jsonify({
-        "message": f"Store '{normalized_name}' deleted successfully",
-        "store": deleted_store
+        "message": result.get("message", f"Store '{name}' deleted successfully"),
     }), 200

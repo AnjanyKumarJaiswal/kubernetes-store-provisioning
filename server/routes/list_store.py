@@ -1,10 +1,30 @@
 from flask import jsonify
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from database import stores_db
+from integrations.store_provisioner import get_provisioner
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-async def list_stores():
-    stores_list = list(stores_db.values())
-    return jsonify(stores_list), 200
+def format_store(store):
+    return {
+        "id": store.get("id"),
+        "name": store.get("name"),
+        "type": store.get("type"),
+        "status": store.get("status"),
+        "url": store.get("url"),
+        "createdAt": store.get("created_at"),
+        "namespace": store.get("namespace"),
+        "error": store.get("error"),
+    }
+
+
+def list_stores():
+    try:
+        provisioner = get_provisioner()
+    except Exception as e:
+        logger.error(f"Failed to initialize provisioner: {e}")
+        return jsonify([]), 200
+
+    result = provisioner.list_stores()
+    stores = [format_store(s) for s in result.get("stores", [])]
+    return jsonify(stores), 200

@@ -1,0 +1,51 @@
+global:
+  storageClass: "standard"
+  domain: "localhost"     
+  environment: "local"
+
+wordpress:
+  image:
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  
+  persistence:
+    size: 2Gi 
+
+mysql:
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  
+  persistence:
+    size: 2Gi 
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+  tls:
+    enabled: false  
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "2"     
+    requests.memory: "4Gi" 
+    limits.cpu: "4"        
+    limits.memory: "8Gi"   
+    persistentvolumeclaims: "5"
+    pods: "20"
+
+networkPolicy:
+  enabled: false

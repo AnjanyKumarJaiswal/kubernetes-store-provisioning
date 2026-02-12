@@ -1,0 +1,164 @@
+global:
+  storageClass: "standard"
+  domain: "localhost"
+  
+store:
+  name: "default-store"
+  namespace: "store-default"
+  enabled: true
+
+wordpress:
+  image:
+    repository: wordpress
+    tag: "6.9"
+    pullPolicy: IfNotPresent
+  
+  replicas: 1
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  admin:
+    user: admin
+    email: admin@store.local
+  plugins:
+    - woocommerce
+  
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /wp-admin/install.php
+      port: 80
+    initialDelaySeconds: 120
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /wp-login.php
+      port: 80
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  persistence:
+    enabled: true
+    size: 5Gi
+    accessMode: ReadWriteOnce
+
+mysql:
+  image:
+    repository: mysql
+    tag: "8.0"
+    pullPolicy: IfNotPresent
+  
+  replicas: 1
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  
+  auth:
+    database: wordpress
+    username: wpuser
+  
+  persistence:
+    enabled: true
+    size: 5Gi
+    accessMode: ReadWriteOnce
+  
+  livenessProbe:
+    enabled: true
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD}
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 5
+  
+  readinessProbe:
+    enabled: true
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - mysql -u ${MYSQL_USER} -p${MYSQL_PASSWORD} -e "SELECT 1"
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 5
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+  tls:
+    enabled: false 
+
+service:
+  type: ClusterIP
+  port: 80
+
+setup:
+  enabled: true
+  image:
+    repository: wordpress
+    tag: "cli-2.9-php8.2"
+    pullPolicy: IfNotPresent
+  
+  sampleProduct:
+    enabled: true
+    name: "Test Product"
+    price: "29.99"
+    description: "This is a test product for order placement testing"
+    sku: "TEST-PRODUCT-001"
+
+security:
+  podSecurityContext:
+    runAsNonRoot: false
+    fsGroup: 1000 
+  
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+      add:
+        - CHOWN
+        - DAC_OVERRIDE
+        - SETGID
+        - SETUID
+        - NET_BIND_SERVICE
+
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "2"
+    requests.memory: "4Gi"
+    limits.cpu: "4"
+    limits.memory: "8Gi"
+    persistentvolumeclaims: "5"
+    pods: "20"
+
+networkPolicy:
+  enabled: false 
+  policyTypes:
+    - Ingress
+    - Egress
