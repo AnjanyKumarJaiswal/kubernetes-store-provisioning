@@ -16,11 +16,11 @@ spec:
   {{- if .Values.ingress.tls.enabled }}
   tls:
   - hosts:
-    - {{ .Values.store.name }}.{{ .Values.global.domain }}
+    - {{ .Values.ingress.host | default (printf "%s.%s" .Values.store.name .Values.global.domain) }}
     secretName: {{ .Values.store.name }}-tls-secret
   {{- end }}
   rules:
-  - host: {{ .Values.store.name }}.{{ .Values.global.domain }}
+  - host: {{ .Values.ingress.host | default (printf "%s.%s" .Values.store.name .Values.global.domain) }}
     http:
       paths:
       - path: /
